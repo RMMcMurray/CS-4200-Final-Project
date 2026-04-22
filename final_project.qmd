@@ -15,38 +15,64 @@ execute:
   cache: false
 ---
 
-# Setup
-This product uses the NASS API but is not endorsed or certified by NASS.
+## Project Goal
 
-## Load API
+- Analyze U.S. milk production data  
+- Build a full data pipeline  
+- Apply SQL and Machine Learning  
 
-```{r}
-#| label: libraries
-library(rnassqs)
-library(DBI)
-library(RSQLite)
-library(knitr)
-library(kableExtra)
-```
+## Data Pipeline
+
+1. Collect data from NASS API  
+2. Clean and format data  
+3. Store in SQLite database  
+4. Query using SQL  
+5. Apply machine learning models  
+
+## Data Collection
 
 ```{r}
 #| label: setup
 #| include: false
 #| cache: true
 
+library(rnassqs)
+library(DBI)
+library(RSQLite)
+library(knitr)
+library(kableExtra)
+library(ggplot2)
+
 nassqs_auth(key = "F69DFA8F-B2BA-3DBD-883E-C62A00818A29")
-params <- list(commodity_desc = "MILK", year__GE = 2020)
+params <- list(
+  commodity_desc = "MILK",
+  statisticcat_desc = "PRODUCTION",
+  unit_desc = "LB",
+  agg_level_desc = "STATE",
+  freq_desc = "ANNUAL",
+  year__GE = 2010
+)
+
 raw_data <- nassqs(params)
 ```
 
+## Data Cleaning
 ```{r}
-#| label: setup_db
-#| include: false
+#| label: data_cleaning
+raw_data$Value <- gsub(",", "", raw_data$Value)
+raw_data$Value <- suppressWarnings(as.numeric(raw_data$Value))
 
-raw_data$Value <- as.numeric(gsub(",", "", raw_data$Value))
+clean_data <- raw_data[!is.na(raw_data$Value), ]
+clean_data <- subset(clean_data, unit_desc == "LB")
 
+clean_data$year <- as.numeric(clean_data$year)
+```
+
+## SQL Database
+
+```{r}
 con <- dbConnect(SQLite(), ":memory:")
-dbWriteTable(con, "milk_data", raw_data)
+dbWriteTable(con, "milk_data", clean_data)
 ```
 
 ```{sql}
@@ -55,9 +81,8 @@ dbWriteTable(con, "milk_data", raw_data)
 --| output.var: "filtered_milk"
 --| echo: true
 
-SELECT state_alpha, year, unit_desc, Value 
+SELECT state_alpha, year, Value 
 FROM milk_data 
-WHERE unit_desc = 'LB'
 ORDER BY Value DESC
 LIMIT 5;
 ```
@@ -70,9 +95,103 @@ knitr::kable(filtered_milk) |>
   kable_styling(full_width = FALSE, font_size = 24)
 ```
 
-# Data Cleaning
+## Top Producers
 
 ```{r}
-#| label: clean
+#| label: bar_chart
 
+top_summary <- aggregate(Value ~ state_alpha, data = clean_data, max)
+top_summary <- top_summary[order(-top_summary$Value), ][1:5, ]
+
+ggplot(top_summary, aes(x = reorder(state_alpha, Value), y = Value)) +
+  geom_col() +
+  coord_flip() +
+  labs(
+    title = "Top 5 Milk Producing States",
+    x = "State",
+    y = "Production (LB)"
+  ) +
+  theme_minimal()
 ```
+
+## Linear Regression
+
+```{r}
+#| label: linear_regression
+model <- lm(Value ~ year + state_alpha, data = clean_data)
+summary(model)
+```
+
+## Production Trends
+
+```{r}
+#| label: linear_plot
+library(ggplot2)
+
+clean_data$year <- as.numeric(clean_data$year)
+
+top_states <- names(sort(
+  tapply(clean_data$Value, clean_data$state_alpha, max),
+  decreasing = TRUE
+))[1:5]
+
+plot_data <- subset(clean_data, state_alpha %in% top_states)
+
+ggplot(plot_data, aes(x = year, y = Value, color = state_alpha)) +
+  geom_line(linewidth = 1) +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(
+    title = "Milk Production Trends (Top 5 States)",
+    x = "Year",
+    y = "Production (LB)",
+    color = "State"
+  ) +
+  theme_minimal()
+```
+
+## K-Means
+
+```{r}
+#| label: k-means
+
+kmeans_data <- clean_data[, c("year", "Value")]
+scaled_data <- scale(kmeans_data)
+scaled_data <- scaled_data[complete.cases(scaled_data), ]
+
+set.seed(123)
+kmeans_result <- kmeans(scaled_data, centers = 3)
+
+valid_rows <- complete.cases(kmeans_data)
+clean_data$cluster <- NA
+clean_data$cluster[valid_rows] <- kmeans_result$cluster
+```
+
+## Clustering Results
+
+```{r}
+ggplot(
+  clean_data[!is.na(clean_data$cluster), ],
+  aes(x = year, y = Value, color = factor(cluster))
+) +
+  geom_point(alpha = 0.7) +
+  labs(
+    title = "Milk Production Clusters",
+    x = "Year",
+    y = "Production (LB)",
+    color = "Cluster"
+  ) +
+  theme_minimal()
+```
+
+## Key Insights
+
+- Production is concentrated in a few states  
+- Trends are stable over time  
+- Clustering reveals natural groupings  
+- Data cleaning is critical for analysis  
+
+## Conclusion
+
+- Built a full data pipeline  
+- Combined SQL and Machine Learning  
+- Demonstrated Big Data workflow  
