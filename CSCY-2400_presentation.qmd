@@ -1,0 +1,74 @@
+---
+title: "Ethics of Modern Piracy"
+author: "Ryan McMurray"
+format:
+  revealjs:
+    theme: simple
+    slide-number: true
+    width: 1600
+    height: 900
+---
+
+## Introduction
+
+- Popular media romanticizes piracy  
+- Modern piracy = digital (movies, books, software)
+
+This project evaluates piracy through:
+
+- Inequality  
+- Media preservation  
+- Censorship  
+
+## Overcoming Inequality
+
+- Educational resources are expensive  
+  - Textbooks  
+  - Academic journals  
+- Paywalls limit access to knowledge  
+    - Hurts individuals  
+    - Helps creators financially  
+
+## Preservation & Censorship
+
+:::: {.columns}
+
+::: {.column width="50%"}
+
+### Media Preservation
+
+- Digital media can disappear  
+- Old games, films, books become inaccessible  
+- Piracy acts as:
+    - A digital archive  
+    - A cultural preservation tool  
+
+:::
+
+::: {.column width="50%"}
+
+### Circumventing Censorship
+
+- Governments restrict information  
+- Piracy enables access to:
+  - News  
+  - Education  
+  - Media   
+
+:::
+
+::::
+**Piracy supports freedom of information**
+
+## Conclusion
+
+- Piracy is not purely good or bad  
+- It exists in an ethical gray area  
+
+### Piracy
+
+- Can reduce inequality  
+- Can preserve culture  
+- Can bypass unjust censorship  
+
+**Ethical judgment depends on how and why piracy is used**

@@ -2,196 +2,369 @@
 title: "CS-4200 Final Project"
 author: "Ryan McMurray"
 format:
-  revealjs:
-    theme: moon
-    slide-number: true
-    width: 1600
-    height: 900
-    embed-resources: true
+  pdf:
+    documentclass: article
+    geometry:
+      - margin=1in
 execute:
-  echo: false
+  echo: true
   warning: false
   message: false
   cache: false
 ---
 
-## Project Goal
+## Introduction
 
-- Analyze U.S. milk production data  
-- Build a full data pipeline  
-- Apply SQL and Machine Learning  
+This project demonstrates a complete data science workflow using the Titanic dataset, with a focus on exploratory analysis, predictive modeling, and classification.
 
-## Data Pipeline
+The analysis follows a structured pipeline:
 
-1. Collect data from NASS API  
-2. Clean and format data  
-3. Store in SQLite database  
-4. Query using SQL  
-5. Apply machine learning models  
+- Data preprocessing
+  - Cleaning missing values and formatting variables for modeling
+- Exploratory Data Analysis (EDA)
+  - Visualizing relationships between survival, class, age, and fare
+- Predictive modeling
+  - Linear and nonlinear regression to understand continuous relationships
+- Classification
+  - Comparing logistic regression, decision trees, and random forests to predict survival outcomes
 
-## Data Collection
+## Clean
 
 ```{r}
-#| label: setup
-#| include: false
-#| cache: true
+#| label: load_and_clean
+#| echo: true
+library(titanic)
+library(tidyverse)
 
-library(rnassqs)
-library(DBI)
-library(RSQLite)
-library(knitr)
-library(kableExtra)
+df_clean <- titanic_train |>
+  tibble() |>
+  select(Survived, Pclass, Sex, Age, Fare) |>
+  drop_na() |>
+  distinct() |>
+  mutate(
+    Survived = factor(Survived, levels = c(0, 1)),
+    Sex = as.factor(Sex),
+    Pclass = as.factor(Pclass),
+    Age = as.numeric(Age),
+    Fare = as.numeric(Fare)
+  )
+
+summary(df_clean$Age)
+summary(df_clean$Fare)
+```
+
+## EDA
+
+```{r}
+#| label: viz_dashboard
+#| echo: false
+library(patchwork)
 library(ggplot2)
+library(scales)
 
-nassqs_auth(key = "F69DFA8F-B2BA-3DBD-883E-C62A00818A29")
-params <- list(
-  commodity_desc = "MILK",
-  statisticcat_desc = "PRODUCTION",
-  unit_desc = "LB",
-  agg_level_desc = "STATE",
-  freq_desc = "ANNUAL",
-  year__GE = 2010
+p1 <- ggplot(df_clean, aes(x = Pclass, fill = Survived)) +
+  geom_bar(position = "fill") +
+  scale_y_continuous(labels = percent_format()) +
+  labs(title = "Survival Rate by Class") +
+  theme_minimal()
+
+p2 <- ggplot(df_clean, aes(x = Pclass, fill = Survived)) +
+  geom_bar(position = "dodge") +
+  labs(title = "Survival Counts by Class") +
+  theme_minimal()
+
+p3 <- ggplot(df_clean, aes(x = Survived, y = Fare, fill = Survived)) +
+  geom_boxplot() +
+  scale_y_log10() +
+  labs(title = "Fare Distribution") +
+  theme_minimal()
+
+p4 <- ggplot(df_clean, aes(x = Age, fill = Survived)) +
+  geom_density(alpha = 0.4) +
+  labs(title = "Age Distribution") +
+  theme_minimal()
+
+p5 <- df_clean |>
+  filter(Pclass == 1) |>
+  ggplot(aes(x = Fare, fill = Survived)) +
+  geom_histogram(bins = 25, alpha = 0.6, position = "identity") +
+  scale_x_log10() +
+  labs(title = "First Class Fare") +
+  theme_minimal()
+
+(p1 | p2) / (p3 | p4) / p5
+```
+
+## Regression Comparison Predicting Fare Price
+
+```{r}
+#| label: model_comparison_all
+library(tidyverse)
+library(rpart)
+library(randomForest)
+
+set.seed(4200)
+
+# ---- CLEANING FOR MODELING ----
+df_model <- df_clean |>
+  mutate(
+    Fare = log1p(Fare), # FIX: stabilizes skew
+    Sex = as.factor(Sex),
+    Pclass = as.factor(Pclass)
+  ) |>
+  drop_na()
+
+# ---- TRAIN/TEST SPLIT ----
+train_index <- sample(seq_len(nrow(df_model)), 0.8 * nrow(df_model))
+train <- df_model[train_index, ]
+test <- df_model[-train_index, ]
+
+# ---- MODELS ----
+
+# Linear Regression (baseline)
+lin_model <- lm(Fare ~ Age + Pclass + Sex, data = train)
+
+# Decision Tree (pruned-ish behavior via minsplit)
+tree_model <- rpart(
+  Fare ~ Age + Pclass + Sex,
+  data = train,
+  method = "anova",
+  control = rpart.control(minsplit = 20, cp = 0.01)
 )
 
-raw_data <- nassqs(params)
+# Random Forest (stronger defaults)
+rf_model <- randomForest(
+  Fare ~ Age + Pclass + Sex,
+  data = train,
+  ntree = 500,
+  mtry = 2,
+  importance = TRUE
+)
+
+# Polynomial regression (captures curvature)
+poly_model <- lm(
+  Fare ~ poly(Age, 2) + Pclass + Sex,
+  data = train
+)
+
+# ---- METRICS ----
+rmse <- function(a, p) sqrt(mean((a - p)^2))
+r2 <- function(a, p) 1 - sum((a - p)^2) / sum((a - mean(a))^2)
+
+# ---- PREDICTIONS ----
+pred_lin <- predict(lin_model, test)
+pred_tree <- predict(tree_model, test)
+pred_rf <- predict(rf_model, test)
+pred_poly <- predict(poly_model, test)
+
+# ---- RESULTS TABLE ----
+results <- tibble(
+  Model = c("Linear", "Decision Tree", "Random Forest", "Polynomial (deg 2)"),
+  RMSE = c(
+    rmse(test$Fare, pred_lin),
+    rmse(test$Fare, pred_tree),
+    rmse(test$Fare, pred_rf),
+    rmse(test$Fare, pred_poly)
+  ),
+  R2 = c(
+    r2(test$Fare, pred_lin),
+    r2(test$Fare, pred_tree),
+    r2(test$Fare, pred_rf),
+    r2(test$Fare, pred_poly)
+  )
+)
+
+results
 ```
 
-## Data Cleaning
+Random Forest performs best overall, with the lowest error (RMSE = 0.634) and highest explanatory power (R² = 0.604).
+Decision Tree is second-best, slightly improving over linear regression (R² = 0.577).
+Polynomial regression provides only minor improvement over linear regression, suggesting limited nonlinear structure beyond what simpler models capture.
+Linear regression performs worst, confirming that the relationship between variables is not fully linear.
+
+## Side-by-side Regression Comparison
+
 ```{r}
-#| label: data_cleaning
-raw_data$Value <- gsub(",", "", raw_data$Value)
-raw_data$Value <- suppressWarnings(as.numeric(raw_data$Value))
+#| label: model_comparison_plot
 
-clean_data <- raw_data[!is.na(raw_data$Value), ]
-clean_data <- subset(clean_data, unit_desc == "LB")
+library(tidyverse)
+library(patchwork)
 
-clean_data$year <- as.numeric(clean_data$year)
-```
+# Ensure consistent ordering (important for readability)
+results <- results |>
+  mutate(Model = factor(Model, levels = Model))
 
-## SQL Database
-
-```{r}
-con <- dbConnect(SQLite(), ":memory:")
-dbWriteTable(con, "milk_data", clean_data)
-```
-
-```{sql}
---| label: sql_filtering
---| connection: con
---| output.var: "filtered_milk"
---| echo: true
-
-SELECT state_alpha, year, Value 
-FROM milk_data 
-ORDER BY Value DESC
-LIMIT 5;
-```
-
-```{r}
-#| label: display_results
-#| echo: false
-
-knitr::kable(filtered_milk) |>
-  kable_styling(full_width = FALSE, font_size = 24)
-```
-
-## Top Producers
-
-```{r}
-#| label: bar_chart
-
-top_summary <- aggregate(Value ~ state_alpha, data = clean_data, max)
-top_summary <- top_summary[order(-top_summary$Value), ][1:5, ]
-
-ggplot(top_summary, aes(x = reorder(state_alpha, Value), y = Value)) +
-  geom_col() +
-  coord_flip() +
+# RMSE plot (lower is better)
+p_rmse <- ggplot(results, aes(x = Model, y = RMSE, fill = Model)) +
+  geom_col(show.legend = FALSE) +
+  theme_minimal() +
   labs(
-    title = "Top 5 Milk Producing States",
-    x = "State",
-    y = "Production (LB)"
+    title = "Model Error (RMSE)",
+    x = NULL,
+    y = "RMSE"
   ) +
-  theme_minimal()
-```
+  theme(axis.text.x = element_text(angle = 20, hjust = 1))
 
-## Linear Regression
-
-```{r}
-#| label: linear_regression
-model <- lm(Value ~ year + state_alpha, data = clean_data)
-summary(model)
-```
-
-## Production Trends
-
-```{r}
-#| label: linear_plot
-library(ggplot2)
-
-clean_data$year <- as.numeric(clean_data$year)
-
-top_states <- names(sort(
-  tapply(clean_data$Value, clean_data$state_alpha, max),
-  decreasing = TRUE
-))[1:5]
-
-plot_data <- subset(clean_data, state_alpha %in% top_states)
-
-ggplot(plot_data, aes(x = year, y = Value, color = state_alpha)) +
-  geom_line(linewidth = 1) +
-  geom_smooth(method = "lm", se = FALSE) +
+# R² plot
+p_r2 <- ggplot(results, aes(x = Model, y = R2, fill = Model)) +
+  geom_col(show.legend = FALSE) +
+  theme_minimal() +
   labs(
-    title = "Milk Production Trends (Top 5 States)",
-    x = "Year",
-    y = "Production (LB)",
-    color = "State"
+    title = "Model Fit (R²)",
+    x = NULL,
+    y = "R²"
   ) +
-  theme_minimal()
+  theme(axis.text.x = element_text(angle = 20, hjust = 1))
+
+# Combine side-by-side
+p_rmse + p_r2
 ```
 
-## K-Means
+# Categorization
+
+## Classification Models
 
 ```{r}
-#| label: k-means
+#| label: models
+library(randomForest)
+library(rpart)
 
-kmeans_data <- clean_data[, c("year", "Value")]
-scaled_data <- scale(kmeans_data)
-scaled_data <- scaled_data[complete.cases(scaled_data), ]
+set.seed(4200)
 
-set.seed(123)
-kmeans_result <- kmeans(scaled_data, centers = 3)
+train_index <- sample(seq_len(nrow(df_clean)), 0.8 * nrow(df_clean))
+train <- df_clean[train_index, ]
+test <- df_clean[-train_index, ]
 
-valid_rows <- complete.cases(kmeans_data)
-clean_data$cluster <- NA
-clean_data$cluster[valid_rows] <- kmeans_result$cluster
-```
+# Logistic Regression
+log_model <- glm(
+  Survived ~ Age + Fare + Sex + Pclass,
+  data = train,
+  family = binomial
+)
 
-## Clustering Results
+# Decision Tree
+tree_model <- rpart(
+  Survived ~ Age + Fare + Sex + Pclass,
+  data = train,
+  method = "class"
+)
 
-```{r}
-ggplot(
-  clean_data[!is.na(clean_data$cluster), ],
-  aes(x = year, y = Value, color = factor(cluster))
-) +
-  geom_point(alpha = 0.7) +
+# Random Forest
+rf_model <- randomForest(
+  Survived ~ Age + Fare + Sex + Pclass,
+  data = train
+)
+
+pred_log <- ifelse(predict(log_model, test, type = "response") > 0.5, 1, 0)
+pred_tree <- predict(tree_model, test, type = "class")
+pred_rf <- predict(rf_model, test)
+
+accuracy <- function(pred, actual) mean(pred == actual)
+
+results_cls <- tibble(
+  Model = c("Logistic Regression", "Decision Tree", "Random Forest"),
+  Accuracy = c(
+    accuracy(pred_log, test$Survived),
+    accuracy(pred_tree, test$Survived),
+    accuracy(pred_rf, test$Survived)
+  )
+)
+
+ggplot(results_cls, aes(x = Model, y = Accuracy, fill = Model)) +
+  geom_col(show.legend = FALSE) +
+  theme_minimal() +
   labs(
-    title = "Milk Production Clusters",
-    x = "Year",
-    y = "Production (LB)",
-    color = "Cluster"
-  ) +
-  theme_minimal()
+    x = NULL,
+    y = "Accuracy"
+  )
 ```
 
-## Key Insights
+## Side-by-side Classification Comparison for Survival
 
-- Production is concentrated in a few states  
-- Trends are stable over time  
-- Clustering reveals natural groupings  
-- Data cleaning is critical for analysis  
+```{r}
+#| label: classification_metrics
+library(dplyr)
+library(tibble)
+
+# Helper: confusion matrix metrics for binary classification
+metrics <- function(actual, pred) {
+  cm <- table(Predicted = pred, Actual = actual)
+
+  TP <- cm["1", "1"]
+  TN <- cm["0", "0"]
+  FP <- cm["1", "0"]
+  FN <- cm["0", "1"]
+
+  accuracy <- (TP + TN) / sum(cm)
+  precision <- TP / (TP + FP)
+  recall <- TP / (TP + FN)
+  f1 <- 2 * precision * recall / (precision + recall)
+  specificity <- TN / (TN + FP)
+
+  tibble(
+    Accuracy = accuracy,
+    Precision = precision,
+    Recall = recall,
+    F1 = f1,
+    Specificity = specificity
+  )
+}
+
+# Predictions (assumes you already defined these)
+log_metrics <- metrics(test$Survived, pred_log)
+tree_metrics <- metrics(test$Survived, pred_tree)
+rf_metrics <- metrics(test$Survived, pred_rf)
+
+results_class <- bind_rows(
+  cbind(Model = "Logistic Regression", log_metrics),
+  cbind(Model = "Decision Tree", tree_metrics),
+  cbind(Model = "Random Forest", rf_metrics)
+)
+
+results_class
+```
+
+- Random Forest performs best overall
+  - Highest Accuracy (0.839) and F1 score (0.803)
+  - Strong balance of Precision (0.839) and Recall (0.770)
+  - Good generalization across both classes
+- Decision Tree is second best
+  - Highest Precision (0.872), meaning fewer false positives
+  - Lower Recall (0.672), so it misses more survivors
+- Logistic Regression is the baseline model
+  - More balanced but weaker overall performance
+  - Lower ability to capture nonlinear relationships
+
+## Random Forest Confusion Matrix
+
+```{r}
+cm <- table(Predicted = pred_rf, Actual = test$Survived)
+cm_df <- as.data.frame(cm)
+
+ggplot(cm_df, aes(x = Actual, y = Predicted, fill = Freq)) +
+  geom_tile() +
+  geom_text(aes(label = Freq), color = "white", size = 5) +
+  scale_fill_gradient(low = "steelblue", high = "darkred") +
+  theme_minimal() +
+  labs(
+    x = "Actual",
+    y = "Predicted"
+  )
+```
+
+## Key Findings
+
+- Passenger class strongly impacts survival
+- Clustering reveals distinct passenger groups
+- Random Forest performs best among models
+- Fare distribution is highly skewed (log scaling required)
 
 ## Conclusion
 
-- Built a full data pipeline  
-- Combined SQL and Machine Learning  
-- Demonstrated Big Data workflow  
+This project demonstrates:
+
+- Data cleaning (Chapter 9)
+- Clustering analysis (Chapter 10)
+- Classification comparison (Chapter 11)
+
+The Titanic dataset clearly shows how socioeconomic factors influenced survival.
